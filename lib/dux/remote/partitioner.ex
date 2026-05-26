@@ -69,6 +69,24 @@ defmodule Dux.Remote.Partitioner do
     end)
   end
 
+  # Partitioned query — each worker calls the user-supplied SQL builder
+  # with its own (idx, n) to produce its source query.
+  defp assign_strategy(
+         %Dux{source: {:partitioned_query, fun}} = pipeline,
+         workers,
+         :round_robin,
+         _opts
+       ) do
+    n = length(workers)
+
+    workers
+    |> Enum.with_index()
+    |> Enum.map(fn {worker, idx} ->
+      source = {:distributed_partitioned_query, fun, idx, n}
+      {worker, %{pipeline | source: source}}
+    end)
+  end
+
   # Other sources — no splitting
   defp assign_strategy(pipeline, workers, :round_robin, _opts) do
     replicate(pipeline, workers)

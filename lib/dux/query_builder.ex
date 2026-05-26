@@ -73,6 +73,18 @@ defmodule Dux.QueryBuilder do
     {sql, []}
   end
 
+  # Partitioned query (coordinator-side fallback — no distribute happened).
+  # Materialize as if there was a single partition: idx=0, n=1.
+  defp source_to_sql({:partitioned_query, fun}, _db) when is_function(fun, 2) do
+    {fun.(0, 1), []}
+  end
+
+  # Partitioned query (worker-side, after Partitioner assigned idx/n).
+  defp source_to_sql({:distributed_partitioned_query, fun, idx, n}, _db)
+       when is_function(fun, 2) do
+    {fun.(idx, n), []}
+  end
+
   defp source_to_sql({:attached, db_name, table_name}, _db) do
     {"SELECT * FROM #{quote_ident(to_string(db_name))}.#{table_name}", []}
   end
@@ -172,11 +184,16 @@ defmodule Dux.QueryBuilder do
   # Distributed scan — worker ATTACHes the database and reads a hash-partitioned slice.
   # The ATTACH SQL goes into source_setup; the SELECT includes the hash filter.
   # DuckDB's hash() returns UBIGINT — cast to BIGINT for safe modulo.
+  #
+  # NOTE: ATTACH is intentionally NOT marked READ_ONLY. DuckDB's MySQL connector
+  # issues `START TRANSACTION READ ONLY` for read-only attaches, which some
+  # MySQL-protocol servers (e.g. SingleStore) reject as unsupported syntax.
+  # Distributed-scan pipelines only emit SELECTs, so READ_ONLY adds nothing.
   defp source_to_sql({:distributed_scan, conn, type, table, col, idx, n}, _db) do
     escaped_conn = escape_sql_string(conn)
     alias_name = "__dscan_#{:erlang.unique_integer([:positive])}"
     install_sql = "INSTALL #{type}; LOAD #{type};"
-    attach_sql = "ATTACH '#{escaped_conn}' AS #{alias_name} (TYPE #{type}, READ_ONLY)"
+    attach_sql = "ATTACH '#{escaped_conn}' AS #{alias_name} (TYPE #{type})"
     col_quoted = quote_ident(col)
 
     select_sql =

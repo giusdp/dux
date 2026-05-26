@@ -65,10 +65,59 @@ defmodule Dux.Connection do
 
   # --- Callbacks ---
 
+  # Override DuckDB version (and URL) when set via app config, e.g.:
+  #
+  #     config :dux, duckdb_version: "1.5.3"
+  #
+  # The matching libduckdb-*.zip URL is derived from the host triplet.
+  # Otherwise we fall back to whatever ADBC's default version is.
+  @duckdb_release_url "https://github.com/duckdb/duckdb/releases/download"
+
+  @doc false
+  def duckdb_download_opts do
+    case Application.get_env(:dux, :duckdb_version) do
+      nil ->
+        []
+
+      version when is_binary(version) ->
+        case duckdb_asset_for_current_platform() do
+          {:ok, asset} ->
+            [version: version, url: "#{@duckdb_release_url}/v#{version}/#{asset}"]
+
+          :error ->
+            []
+        end
+    end
+  end
+
+  defp duckdb_asset_for_current_platform do
+    triplet = to_string(:erlang.system_info(:system_architecture))
+
+    cond do
+      String.contains?(triplet, "linux") and String.contains?(triplet, "aarch64") ->
+        {:ok, "libduckdb-linux-arm64.zip"}
+
+      String.contains?(triplet, "linux") and String.contains?(triplet, "x86_64") ->
+        {:ok, "libduckdb-linux-amd64.zip"}
+
+      String.contains?(triplet, "darwin") ->
+        {:ok, "libduckdb-osx-universal.zip"}
+
+      String.contains?(triplet, "win32") ->
+        if String.contains?(triplet, "aarch64"),
+          do: {:ok, "libduckdb-windows-arm64.zip"},
+          else: {:ok, "libduckdb-windows-amd64.zip"}
+
+      true ->
+        :error
+    end
+  end
+
   @impl true
   def init(opts) do
     # Ensure DuckDB driver is available
-    Adbc.download_driver!(:duckdb)
+    download_opts = duckdb_download_opts()
+    Adbc.download_driver!(:duckdb, download_opts)
 
     db_opts =
       case Keyword.get(opts, :path) do
@@ -76,9 +125,12 @@ defmodule Dux.Connection do
         path -> [path: path]
       end
 
+    # Forward the version so Adbc.Database loads the build we just downloaded.
+    version_opts = Keyword.take(download_opts, [:version])
+
     pool_size = Keyword.get(opts, :pool_size, 1)
 
-    {:ok, db} = Adbc.Database.start_link([driver: :duckdb] ++ db_opts)
+    {:ok, db} = Adbc.Database.start_link([driver: :duckdb] ++ version_opts ++ db_opts)
 
     conns =
       for _ <- 1..pool_size do

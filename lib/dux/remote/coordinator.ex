@@ -247,11 +247,15 @@ defmodule Dux.Remote.Coordinator do
     merger
   end
 
-  defp fold_streaming_result({:ok, {:error, _reason}}, merger) do
+  defp fold_streaming_result({:ok, {:error, reason}}, merger) do
+    require Logger
+    Logger.error("[dux.streaming] worker returned error: #{inspect(reason)}")
     StreamingMerger.record_failure(merger)
   end
 
-  defp fold_streaming_result({:exit, _reason}, merger) do
+  defp fold_streaming_result({:exit, reason}, merger) do
+    require Logger
+    Logger.error("[dux.streaming] worker exited: #{inspect(reason)}")
     StreamingMerger.record_failure(merger)
   end
 
@@ -701,6 +705,7 @@ defmodule Dux.Remote.Coordinator do
   defp worker_safe_source?({:parquet_list, _, _}), do: true
   defp worker_safe_source?({:ducklake_files, _}), do: true
   defp worker_safe_source?({:distributed_scan, _, _, _, _, _, _}), do: true
+  defp worker_safe_source?({:distributed_partitioned_query, _, _, _}), do: true
   defp worker_safe_source?({:csv, _, _}), do: true
   defp worker_safe_source?({:ndjson, _, _}), do: true
   defp worker_safe_source?({:sql, _}), do: true

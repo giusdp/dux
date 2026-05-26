@@ -160,7 +160,8 @@ defmodule Dux.Remote.Worker do
 
   @impl true
   def init(opts) do
-    Adbc.download_driver!(:duckdb)
+    download_opts = Dux.Connection.duckdb_download_opts()
+    Adbc.download_driver!(:duckdb, download_opts)
 
     driver_opts =
       case Keyword.get(opts, :path) do
@@ -168,7 +169,12 @@ defmodule Dux.Remote.Worker do
         path -> [path: path]
       end
 
-    {:ok, db} = Adbc.Database.start_link(driver: :duckdb, process_options: driver_opts)
+    version_opts = Keyword.take(download_opts, [:version])
+
+    {:ok, db} =
+      Adbc.Database.start_link(
+        [driver: :duckdb] ++ version_opts ++ [process_options: driver_opts]
+      )
     {:ok, conn} = Adbc.Connection.start_link(database: db)
     Dux.Connection.configure_duckdb(conn, opts)
 

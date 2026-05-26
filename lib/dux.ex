@@ -135,6 +135,44 @@ defmodule Dux do
   end
 
   @doc group: :constructors
+  @doc ~S"""
+  Create a Dux from a per-worker SQL builder function.
+
+  Used when the partition predicate must be evaluated by the source
+  database itself (rather than locally in DuckDB). The function receives
+  `(partition_idx, total_partitions)` and must return a complete `SELECT`
+  SQL string for that worker's slice.
+
+  When the pipeline is run via `Dux.distribute(workers)`, each worker
+  invokes the function with its own `(idx, total)`. When run on the
+  coordinator (no distribute), the function is called as `fun.(0, 1)` and
+  returns the full unpartitioned query.
+
+  This is the escape hatch for sources where `from_attached(..., partition_by: ...)`
+  can't push the hash predicate down — notably DuckDB → MySQL/SingleStore,
+  whose connector doesn't translate DuckDB's `hash()` to a server-side
+  function. The user supplies a query that inlines an appropriate
+  server-side hash (`CRC32`, etc.) so partition filtering happens in the
+  source DB.
+
+  ## Example
+
+      Dux.from_partitioned_query(fn idx, n ->
+        "SELECT * FROM mysql_query('ss', " <>
+          "'SELECT * FROM dv.transactions " <>
+            "WHERE CRC32(`id`) MOD #{n} = #{idx} " <>
+            "AND event_time >= ''2026-01-01''')"
+      end)
+      |> Dux.distribute(workers)
+      |> Dux.group_by(:operator)
+      |> Dux.summarise_with(n: "count(*)")
+      |> Dux.to_rows()
+  """
+  def from_partitioned_query(fun) when is_function(fun, 2) do
+    %Dux{source: {:partitioned_query, fun}, ops: [], names: [], dtypes: %{}, groups: []}
+  end
+
+  @doc group: :constructors
   @doc """
   Create a Dux from a list of maps.
 
